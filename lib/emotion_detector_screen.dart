@@ -27,7 +27,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
   Future<void> _loadModelAndLabels() async {
     try {
-      _interpreter = await Interpreter.fromAsset('best_int8.tflite');
+      _interpreter = await Interpreter.fromAsset('assets/best_float32.tflite');
       print("Model loaded!");
 
       // Load label dari file
@@ -52,13 +52,21 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   }
 
   Future<void> _classifyEmotion(File image) async {
-    final input = await _preprocessImage(image);
-    final output = List.filled(_labels.length, 0.0).reshape([1, _labels.length]);
+    final inputImage = await _preprocessImage(image);
+
+    final input = [inputImage];
+
+    final output = List.filled(
+      _labels.length,
+      0.0,
+    ).reshape([1, _labels.length]);
 
     _interpreter.run(input, output);
 
     final predictions = output[0] as List<double>;
-    final maxIndex = predictions.indexWhere((e) => e == predictions.reduce((a, b) => a > b ? a : b));
+    final maxIndex = predictions.indexWhere(
+      (e) => e == predictions.reduce((a, b) => a > b ? a : b),
+    );
     final label = _labels[maxIndex];
     final confidence = predictions[maxIndex];
 
@@ -95,11 +103,19 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.emoji_emotions, color: Colors.orangeAccent, size: 40),
+              const Icon(
+                Icons.emoji_emotions,
+                color: Colors.orangeAccent,
+                size: 40,
+              ),
               const SizedBox(height: 24),
               const Text(
                 'Emotion Detector',
-                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 40),
               OptionButton(
@@ -160,14 +176,20 @@ class OptionButton extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Ink(
-        decoration: BoxDecoration(gradient: gradient, borderRadius: BorderRadius.circular(16)),
+        decoration: BoxDecoration(
+          gradient: gradient,
+          borderRadius: BorderRadius.circular(16),
+        ),
         padding: const EdgeInsets.all(24),
         child: Row(
           children: [
             Icon(icon, color: Colors.white),
             const SizedBox(width: 16),
             Expanded(
-              child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 16)),
+              child: Text(
+                label,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              ),
             ),
             const Icon(Icons.arrow_forward, color: Colors.white),
           ],
