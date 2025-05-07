@@ -18,8 +18,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   File? _selectedImage;
   late Interpreter _interpreter;
   List<String> _labels = [];
-  String _predictionResult = "";
-  Rect? _faceBoundingBox;
+  List<Rect> _faceBoundingBoxes = [];
+  List<String> _predictionResults = [];
   img.Image? _originalImage;
 
   @override
@@ -47,7 +47,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       final imageFile = File(pickedFile.path);
       setState(() {
         _selectedImage = imageFile;
-        _faceBoundingBox = null;
+        _faceBoundingBoxes = [];
+        _predictionResults = [];
       });
       await _detectAndClassify(imageFile);
     }
@@ -67,41 +68,48 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     await faceDetector.close();
 
     if (faces.isEmpty) {
-      setState(() => _predictionResult = "Tidak ada wajah terdeteksi.");
+      setState(() {
+        _predictionResults = ["Tidak ada wajah terdeteksi."];
+        _faceBoundingBoxes = [];
+      });
       return;
     }
 
     final imageBytes = await imageFile.readAsBytes();
     _originalImage = img.decodeImage(imageBytes);
 
-    final face = faces[0].boundingBox;
+    List<Rect> boundingBoxes = [];
+    List<String> predictions = [];
 
-    final croppedFace = img.copyCrop(
-      _originalImage!,
-      x: face.left.toInt().clamp(0, _originalImage!.width - 1),
-      y: face.top.toInt().clamp(0, _originalImage!.height - 1),
-      width: face.width.toInt().clamp(0, _originalImage!.width),
-      height: face.height.toInt().clamp(0, _originalImage!.height),
-    );
+    for (var face in faces) {
+      final box = face.boundingBox;
 
-    final resizedFace = img.copyResize(croppedFace, width: 224, height: 224);
-    final input = _imageToInput(resizedFace);
+      final croppedFace = img.copyCrop(
+        _originalImage!,
+        x: box.left.toInt().clamp(0, _originalImage!.width - 1),
+        y: box.top.toInt().clamp(0, _originalImage!.height - 1),
+        width: box.width.toInt().clamp(1, _originalImage!.width - box.left.toInt()),
+        height: box.height.toInt().clamp(1, _originalImage!.height - box.top.toInt()),
+      );
 
-    final output = List.filled(
-      _labels.length,
-      0.0,
-    ).reshape([1, _labels.length]);
-    _interpreter.run([input], output);
+      final resizedFace = img.copyResize(croppedFace, width: 224, height: 224);
+      final input = _imageToInput(resizedFace);
 
-    final prediction = output[0] as List<double>;
-    final maxIndex = prediction.indexWhere(
-      (e) => e == prediction.reduce((a, b) => a > b ? a : b),
-    );
+      final output = List.filled(_labels.length, 0.0).reshape([1, _labels.length]);
+      _interpreter.run([input], output);
+
+      final prediction = output[0] as List<double>;
+      final maxIndex = prediction.indexWhere(
+        (e) => e == prediction.reduce((a, b) => a > b ? a : b),
+      );
+
+      boundingBoxes.add(box);
+      predictions.add("${_labels[maxIndex]} (${(prediction[maxIndex] * 100).toStringAsFixed(2)}%)");
+    }
 
     setState(() {
-      _faceBoundingBox = face;
-      _predictionResult =
-          "${_labels[maxIndex]} (${(prediction[maxIndex] * 100).toStringAsFixed(2)}%)";
+      _faceBoundingBoxes = boundingBoxes;
+      _predictionResults = predictions;
     });
   }
 
@@ -162,11 +170,12 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                       return Stack(
                         children: [
                           Image.file(_selectedImage!, fit: BoxFit.contain, width: constraints.maxWidth),
-                          if (_faceBoundingBox != null && _originalImage != null)
+                          if (_faceBoundingBoxes.isNotEmpty && _originalImage != null)
                             Positioned.fill(
                               child: CustomPaint(
                                 painter: FaceBoxPainter(
-                                  _faceBoundingBox!,
+                                  faceRects: _faceBoundingBoxes,
+                                  labels: _predictionResults,
                                   originalSize: Size(
                                     _originalImage!.width.toDouble(),
                                     _originalImage!.height.toDouble(),
@@ -180,11 +189,14 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                   ),
                 ),
               const SizedBox(height: 20),
-              Text(
-                _predictionResult,
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                textAlign: TextAlign.center,
-              ),
+              ..._predictionResults.map((res) => Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  res,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  textAlign: TextAlign.center,
+                ),
+              )),
             ],
           ),
         ),
@@ -237,10 +249,15 @@ class OptionButton extends StatelessWidget {
 }
 
 class FaceBoxPainter extends CustomPainter {
-  final Rect faceRect;
+  final List<Rect> faceRects;
+  final List<String> labels;
   final Size originalSize;
 
-  FaceBoxPainter(this.faceRect, {required this.originalSize});
+  FaceBoxPainter({
+    required this.faceRects,
+    required this.labels,
+    required this.originalSize,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -249,18 +266,47 @@ class FaceBoxPainter extends CustomPainter {
       ..strokeWidth = 3
       ..style = PaintingStyle.stroke;
 
-    // Scale bounding box to displayed image size
     double scaleX = size.width / originalSize.width;
     double scaleY = size.height / originalSize.height;
 
-    Rect scaledRect = Rect.fromLTRB(
-      faceRect.left * scaleX,
-      faceRect.top * scaleY,
-      faceRect.right * scaleX,
-      faceRect.bottom * scaleY,
-    );
+    for (int i = 0; i < faceRects.length; i++) {
+      final rect = faceRects[i];
+      final scaledRect = Rect.fromLTRB(
+        rect.left * scaleX,
+        rect.top * scaleY,
+        rect.right * scaleX,
+        rect.bottom * scaleY,
+      );
 
-    canvas.drawRect(scaledRect, paint);
+      canvas.drawRect(scaledRect, paint);
+
+      final textSpan = TextSpan(
+        text: labels[i],
+        style: const TextStyle(color: Colors.black, fontSize: 16),
+      );
+
+      final textPainter = TextPainter(
+        text: textSpan,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+
+      final offset = Offset(scaledRect.left, scaledRect.bottom + 4);
+      final bgRect = Rect.fromLTWH(
+        offset.dx - 4,
+        offset.dy - 2,
+        textPainter.width + 8,
+        textPainter.height + 4,
+      );
+
+      final bgPaint = Paint()..color = Colors.white.withOpacity(0.8);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(bgRect, const Radius.circular(4)),
+        bgPaint,
+      );
+
+      textPainter.paint(canvas, offset);
+    }
   }
 
   @override
