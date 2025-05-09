@@ -33,6 +33,10 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   File? _selectedVideo;
   bool _isProcessing = false;
 
+  // Baru: list untuk menyimpan hasil frame + label
+  List<img.Image> _processedFrames = [];
+  List<String> _frameLabels = [];
+
   @override
   void initState() {
     super.initState();
@@ -43,10 +47,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   Future<void> _loadModelAndLabels() async {
     _interpreter = await Interpreter.fromAsset('assets/best_float32.tflite');
     final rawLabels = await rootBundle.loadString('assets/label.txt');
-    _labels = rawLabels
-        .split('\n')
-        .where((l) => l.trim().isNotEmpty)
-        .toList();
+    _labels = rawLabels.split('\n').where((l) => l.trim().isNotEmpty).toList();
   }
 
   void _initFaceDetector() {
@@ -68,6 +69,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _selectedVideo = null;
       _faceBoxes = [];
       _predictions = [];
+      _processedFrames.clear();
+      _frameLabels.clear();
     });
 
     await _detectAndClassifyImage(_selectedImage!);
@@ -100,8 +103,10 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       final resized = img.copyResize(crop, width: 224, height: 224);
       final input = _imageToInput(resized);
 
-      var output = List.filled(_labels.length, 0.0)
-          .reshape([1, _labels.length]);
+      var output = List.filled(
+        _labels.length,
+        0.0,
+      ).reshape([1, _labels.length]);
       _interpreter.run([input], output);
 
       final probs = output[0] as List<double>;
@@ -136,74 +141,101 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _selectedImage = null;
       _faceBoxes = [];
       _predictions = [];
+      _processedFrames.clear();
+      _frameLabels.clear();
     });
 
     await _processVideo(_selectedVideo!);
   }
 
   Future<void> _processVideo(File videoFile) async {
-    setState(() => _isProcessing = true);
+    setState(() {
+      _isProcessing = true;
+      _processedFrames.clear();
+      _frameLabels.clear();
+    });
 
+    // Inisialisasi VideoPlayer untuk tahu durasi
     final controller = VideoPlayerController.file(videoFile);
     await controller.initialize();
-    final totalMs = controller.value.duration.inMilliseconds;
+    final totalSeconds = controller.value.duration.inSeconds;
     await controller.dispose();
 
-    for (int t = 0; t < totalMs; t += 1000) {
+    // Batasi maksimal 60 detik
+    final maxSeconds = totalSeconds > 60 ? 60 : totalSeconds;
+
+    // Loop detik demi detik
+    for (int sec = 0; sec < maxSeconds; sec++) {
+      final timeMs = sec * 1000;
       final bytes = await VideoThumbnail.thumbnailData(
         video: videoFile.path,
-        timeMs: t,
+        timeMs: timeMs,
         imageFormat: ImageFormat.JPEG,
         quality: 80,
       );
       if (bytes == null) continue;
-      final frameImg = img.decodeImage(bytes)!;
-      await _classifyFrame(frameImg);
+
+      final frameImg = img.decodeImage(bytes);
+      if (frameImg == null) continue;
+
+      // Klasifikasi dan simpan ke list
+      await _classifyFrame(frameImg, addToList: true);
     }
 
     setState(() => _isProcessing = false);
   }
 
-  Future<String> _classifyFrame(img.Image frame) async {
+  Future<String> _classifyFrame(
+    img.Image frame, {
+    bool addToList = false,
+  }) async {
     final tmp = await _saveTempJpeg(frame);
-    final faces = await _faceDetector
-        .processImage(InputImage.fromFilePath(tmp.path));
+    final faces = await _faceDetector.processImage(
+      InputImage.fromFilePath(tmp.path),
+    );
     tmp.deleteSync();
 
-    if (faces.isEmpty) return 'No face';
+    String label;
+    if (faces.isEmpty) {
+      label = 'No face';
+    } else {
+      final box = faces.first.boundingBox;
+      final crop = img.copyCrop(
+        frame,
+        x: box.left.toInt().clamp(0, frame.width - 1),
+        y: box.top.toInt().clamp(0, frame.height - 1),
+        width: box.width.toInt().clamp(1, frame.width),
+        height: box.height.toInt().clamp(1, frame.height),
+      );
+      final resized = img.copyResize(crop, width: 224, height: 224);
+      final input = _imageToInput(resized);
 
-    final box = faces.first.boundingBox;
-    final crop = img.copyCrop(
-      frame,
-      x: box.left.toInt().clamp(0, frame.width - 1),
-      y: box.top.toInt().clamp(0, frame.height - 1),
-      width: box.width.toInt().clamp(1, frame.width),
-      height: box.height.toInt().clamp(1, frame.height),
-    );
-    final resized = img.copyResize(crop, width: 224, height: 224);
-    final input = _imageToInput(resized);
+      var output = List.filled(
+        _labels.length,
+        0.0,
+      ).reshape([1, _labels.length]);
+      _interpreter.run([input], output);
 
-    var output = List.filled(_labels.length, 0.0)
-        .reshape([1, _labels.length]);
-    _interpreter.run([input], output);
+      final probs = output[0] as List<double>;
+      final max = probs.reduce((a, b) => a > b ? a : b);
+      final idx = probs.indexOf(max);
+      label = '${_labels[idx]} (${(max * 100).toStringAsFixed(1)}%)';
+    }
 
-    final probs = output[0] as List<double>;
-    final max = probs.reduce((a, b) => a > b ? a : b);
-    final idx = probs.indexOf(max);
+    if (addToList) {
+      _processedFrames.add(frame);
+      _frameLabels.add(label);
+    }
 
-    setState(() {
-      _faceBoxes = [box];
-      _predictions = ['${_labels[idx]} (${(max * 100).toStringAsFixed(1)}%)'];
-    });
-
-    return _predictions.first;
+    return label;
   }
 
   Future<File> _saveTempJpeg(img.Image image) async {
     final jpg = img.encodeJpg(image);
     final dir = await getTemporaryDirectory();
     final file = File(
-        '\${dir.path}/\${DateTime.now().millisecondsSinceEpoch}.jpg');
+      '${dir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg',
+    );
     await file.writeAsBytes(jpg);
     return file;
   }
@@ -214,10 +246,12 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
     final painted = await _renderImageWithBoxes();
     final dir = await getExternalStorageDirectory();
-    final path = '\${dir!.path}/emotion_\${DateTime.now().millisecondsSinceEpoch}.png';
+    final path =
+        '${dir!.path}/emotion_${DateTime.now().millisecondsSinceEpoch}.png';
     await File(path).writeAsBytes(img.encodePng(painted));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Tersimpan di \$path')),);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Tersimpan di $path')));
   }
 
   Future<img.Image> _renderImageWithBoxes() async {
@@ -256,6 +290,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _faceBoxes = [];
       _predictions = [];
       _isProcessing = false;
+      _processedFrames.clear();
+      _frameLabels.clear();
     });
   }
 
@@ -282,45 +318,81 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
               child: Container(
                 width: double.infinity,
                 color: Colors.grey[900],
-                child: (_selectedImage != null && _originalImage != null)
-                    ? LayoutBuilder(
-                        builder: (ctx, constraints) {
-                          final ar = _originalImage!.width / _originalImage!.height;
-                          final width = constraints.maxWidth;
-                          final height = width / ar;
-                          return SizedBox(
-                            width: width,
-                            height: height,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                Image.file(
-                                  _selectedImage!,
-                                  fit: BoxFit.cover,
-                                ),
-                                CustomPaint(
-                                  painter: FaceBoxPainter(
-                                    faceRects: _faceBoxes,
-                                    labels: _predictions,
-                                    originalSize: Size(
-                                      _originalImage!.width.toDouble(),
-                                      _originalImage!.height.toDouble(),
+                child:
+                    (_selectedImage != null && _originalImage != null)
+                        ? LayoutBuilder(
+                          builder: (ctx, constraints) {
+                            final ar =
+                                _originalImage!.width / _originalImage!.height;
+                            final width = constraints.maxWidth;
+                            final height = width / ar;
+                            return SizedBox(
+                              width: width,
+                              height: height,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  Image.file(
+                                    _selectedImage!,
+                                    fit: BoxFit.cover,
+                                  ),
+                                  CustomPaint(
+                                    painter: FaceBoxPainter(
+                                      faceRects: _faceBoxes,
+                                      labels: _predictions,
+                                      originalSize: Size(
+                                        _originalImage!.width.toDouble(),
+                                        _originalImage!.height.toDouble(),
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      )
-                    : Center(
-                        child: Text(
-                          'Pilih Gambar atau Video',
-                          style: TextStyle(color: Colors.white54),
+                                ],
+                              ),
+                            );
+                          },
+                        )
+                        : Center(
+                          child: Text(
+                            'Pilih Gambar atau Video',
+                            style: TextStyle(color: Colors.white54),
+                          ),
                         ),
-                      ),
               ),
             ),
+
+            const SizedBox(height: 12),
+
+            // HORIZONTAL SCROLL VIEW UNTUK FRAME VIDEO
+            if (_processedFrames.isNotEmpty)
+              SizedBox(
+                height: 140,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _processedFrames.length,
+                  itemBuilder: (context, index) {
+                    final bytes = Uint8List.fromList(
+                      img.encodeJpg(_processedFrames[index]),
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        children: [
+                          Image.memory(bytes, height: 100),
+                          const SizedBox(height: 4),
+                          Text(
+                            _frameLabels[index],
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+
             const SizedBox(height: 12),
 
             // ACTION BUTTONS
@@ -329,15 +401,27 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
               child: Row(
                 children: [
                   Expanded(
-                    child: OptionButton(icon: Icons.photo, label: 'Gambar', onTap: () => _pickImage(ImageSource.gallery)),
+                    child: OptionButton(
+                      icon: Icons.photo,
+                      label: 'Gambar',
+                      onTap: () => _pickImage(ImageSource.gallery),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: OptionButton(icon: Icons.camera_alt, label: 'Kamera', onTap: () => _pickImage(ImageSource.camera)),
+                    child: OptionButton(
+                      icon: Icons.camera_alt,
+                      label: 'Kamera',
+                      onTap: () => _pickImage(ImageSource.camera),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: OptionButton(icon: Icons.video_library, label: 'Video', onTap: _pickVideo),
+                    child: OptionButton(
+                      icon: Icons.video_library,
+                      label: 'Video',
+                      onTap: _pickVideo,
+                    ),
                   ),
                 ],
               ),
@@ -349,12 +433,21 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                 children: [
                   if (_selectedImage != null)
                     Expanded(
-                      child: OptionButton(icon: Icons.download, label: 'Simpan', onTap: _saveProcessedImage),
+                      child: OptionButton(
+                        icon: Icons.download,
+                        label: 'Simpan',
+                        onTap: _saveProcessedImage,
+                      ),
                     ),
-                  if (_selectedImage != null || _selectedVideo != null) const SizedBox(width: 8),
+                  if (_selectedImage != null || _selectedVideo != null)
+                    const SizedBox(width: 8),
                   if (_selectedImage != null || _selectedVideo != null)
                     Expanded(
-                      child: OptionButton(icon: Icons.refresh, label: 'Reset', onTap: _reset),
+                      child: OptionButton(
+                        icon: Icons.refresh,
+                        label: 'Reset',
+                        onTap: _reset,
+                      ),
                     ),
                 ],
               ),
@@ -372,7 +465,12 @@ class OptionButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const OptionButton({Key? key, required this.icon, required this.label, required this.onTap}) : super(key: key);
+  const OptionButton({
+    Key? key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -414,14 +512,19 @@ class FaceBoxPainter extends CustomPainter {
   final List<String> labels;
   final Size originalSize;
 
-  FaceBoxPainter({required this.faceRects, required this.labels, required this.originalSize});
+  FaceBoxPainter({
+    required this.faceRects,
+    required this.labels,
+    required this.originalSize,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.red
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
+    final paint =
+        Paint()
+          ..color = Colors.red
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3;
 
     final scaleX = size.width / originalSize.width;
     final scaleY = size.height / originalSize.height;
@@ -436,7 +539,10 @@ class FaceBoxPainter extends CustomPainter {
       );
       canvas.drawRect(sr, paint);
 
-      final span = TextSpan(text: labels[i], style: const TextStyle(color: Colors.white, fontSize: 14));
+      final span = TextSpan(
+        text: labels[i],
+        style: const TextStyle(color: Colors.white, fontSize: 14),
+      );
       final tp = TextPainter(text: span, textDirection: TextDirection.ltr);
       tp.layout();
       tp.paint(canvas, Offset(sr.left, sr.bottom + 4));
