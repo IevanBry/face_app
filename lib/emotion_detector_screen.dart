@@ -236,12 +236,10 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
       final result = await _processAndClassifyFrame(frameImg);
 
-      // tambahkan tiap frame ke list
       _processedFrames.add(result['image'] as img.Image);
       _frameLabels.add((result['labels'] as List<String>).join(', '));
     }
 
-    // Setelah loop selesai, langsung pilih frame pertama
     if (_processedFrames.isNotEmpty) {
       final firstBytes = Uint8List.fromList(
         img.encodeJpg(_processedFrames.first),
@@ -252,7 +250,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
     setState(() {
       _isProcessing = false;
-      // agar UI rebuild dengan displayedFrameBytes & selectedFrameIndex baru
     });
   }
 
@@ -273,10 +270,9 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     );
     final labels = <String>[];
 
-    // Iterasi setiap wajah yang terdeteksi :contentReference[oaicite:3]{index=3}
     for (final face in faces) {
       final box = face.boundingBox;
-      // Pastikan koordinat valid :contentReference[oaicite:4]{index=4}
+
       final left = box.left.toInt().clamp(0, frame.width - 1);
       final top = box.top.toInt().clamp(0, frame.height - 1);
       final w = box.width.toInt().clamp(1, frame.width);
@@ -300,7 +296,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
       labels.add(label);
 
-      // Gambar kotak merah di frame :contentReference[oaicite:5]{index=5}
       img.drawRect(
         processed,
         x1: left,
@@ -321,7 +316,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       );
     }
 
-    // Jika tidak ada wajah, tambahkan informasi No face :contentReference[oaicite:7]{index=7}
     if (faces.isEmpty) {
       labels.add('No face');
     }
@@ -345,52 +339,61 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   // Permintaan permission
   Future<bool> _requestPermission() async {
     if (Platform.isAndroid) {
-      // Android < 11: STORAGE
-      if (await Permission.storage.isGranted) return true;
+      if (await Permission.manageExternalStorage.isGranted) return true;
 
-      // Android 11–12: MANAGE_EXTERNAL_STORAGE (all files)
-      if (Platform.isAndroid &&
-          (await Permission.manageExternalStorage.isDenied)) {
-        final status = await Permission.manageExternalStorage.request();
-        return status.isGranted;
-      }
-
-      // Android < 11: fallback ke storage
-      final status = await Permission.storage.request();
+      var status = await Permission.manageExternalStorage.request();
       return status.isGranted;
     } else if (Platform.isIOS) {
-      // iOS: photo library
-      final status = await Permission.photos.request();
+      var status = await Permission.photos.request();
       return status.isGranted;
     }
-    // other platforms
-    return true;
+    return false;
   }
 
   // Simpan ke galeri
   Future<void> _saveProcessedImage() async {
     if (_selectedImage == null || _originalImage == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Konfirmasi'),
+            content: const Text('Apakah Anda yakin ingin menyimpan ke galeri?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Batal'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Simpan'),
+              ),
+            ],
+          ),
+    );
+
+    // Jika tidak konfirmasi, hentikan
+    if (confirm != true) return;
+
     if (!await _requestPermission()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Storage permission denied')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Izin penyimpanan ditolak')));
       return;
     }
 
-    // 1. Render gambar dengan kotak & label
     final painted = await _renderImageWithBoxes();
-    // 2. Encode ke PNG bytes
+
     final pngBytes = img.encodePng(painted);
     final bytes = Uint8List.fromList(pngBytes);
 
-    // 3. Simpan ke galeri
     final result = await ImageGallerySaverPlus.saveImage(
       bytes,
-      quality: 100, // opsi kualitas
+      quality: 100,
       name: 'emotion_${DateTime.now().millisecondsSinceEpoch}',
     );
 
-    // 4. Tampilkan notifikasi
     final success = (result == true || result['isSuccess'] == true);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -575,21 +578,20 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  if (_selectedImage != null)
-                    Expanded(
-                      child: OptionButton(
-                        icon: Icons.download,
-                        label: 'Simpan',
-                        onTap: _saveProcessedImage,
+            if (_selectedImage != null || _selectedVideo != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    if (_selectedImage != null)
+                      Expanded(
+                        child: OptionButton(
+                          icon: Icons.download,
+                          label: 'Simpan',
+                          onTap: _saveProcessedImage,
+                        ),
                       ),
-                    ),
-                  if (_selectedImage != null || _selectedVideo != null)
-                    const SizedBox(width: 8),
-                  if (_selectedImage != null || _selectedVideo != null)
+                    if (_selectedImage != null) const SizedBox(width: 8),
                     Expanded(
                       child: OptionButton(
                         icon: Icons.refresh,
@@ -597,9 +599,10 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                         onTap: _reset,
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
-            ),
+
             const SizedBox(height: 16),
           ],
         ),
