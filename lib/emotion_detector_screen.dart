@@ -11,6 +11,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 
 class EmotionDetectorScreen extends StatefulWidget {
   const EmotionDetectorScreen({Key? key}) : super(key: key);
@@ -33,7 +34,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   File? _selectedVideo;
   bool _isProcessing = false;
 
-  // Baru: list untuk menyimpan hasil frame + label
   List<img.Image> _processedFrames = [];
   List<String> _frameLabels = [];
 
@@ -47,7 +47,12 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   Future<void> _loadModelAndLabels() async {
     _interpreter = await Interpreter.fromAsset('assets/best_float32.tflite');
     final rawLabels = await rootBundle.loadString('assets/label.txt');
-    _labels = rawLabels.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    _labels =
+        rawLabels
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)
+            .toList();
   }
 
   void _initFaceDetector() {
@@ -81,7 +86,9 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     final faces = await _faceDetector.processImage(inputImg);
 
     if (faces.isEmpty) {
-      setState(() => _predictions = ['Tidak ada wajah terdeteksi.']);
+      setState(() {
+        _predictions = ['Tidak ada wajah terdeteksi.'];
+      });
       return;
     }
 
@@ -91,7 +98,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     final boxes = <Rect>[];
     final preds = <String>[];
 
-    for (var face in faces) {
+    for (final face in faces) {
       final box = face.boundingBox;
       final crop = img.copyCrop(
         _originalImage!,
@@ -109,7 +116,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       ).reshape([1, _labels.length]);
       _interpreter.run([input], output);
 
-      final probs = output[0] as List<double>;
+      final probs = (output[0] as List).cast<double>();
       final max = probs.reduce((a, b) => a > b ? a : b);
       final idx = probs.indexOf(max);
 
@@ -155,21 +162,16 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _frameLabels.clear();
     });
 
-    // Inisialisasi VideoPlayer untuk tahu durasi
     final controller = VideoPlayerController.file(videoFile);
     await controller.initialize();
     final totalSeconds = controller.value.duration.inSeconds;
     await controller.dispose();
 
-    // Batasi maksimal 60 detik
     final maxSeconds = totalSeconds > 60 ? 60 : totalSeconds;
-
-    // Loop detik demi detik
     for (int sec = 0; sec < maxSeconds; sec++) {
-      final timeMs = sec * 1000;
       final bytes = await VideoThumbnail.thumbnailData(
         video: videoFile.path,
-        timeMs: timeMs,
+        timeMs: sec * 1000,
         imageFormat: ImageFormat.JPEG,
         quality: 80,
       );
@@ -178,7 +180,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       final frameImg = img.decodeImage(bytes);
       if (frameImg == null) continue;
 
-      // Klasifikasi dan simpan ke list
       await _classifyFrame(frameImg, addToList: true);
     }
 
@@ -216,7 +217,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       ).reshape([1, _labels.length]);
       _interpreter.run([input], output);
 
-      final probs = output[0] as List<double>;
+      final probs = (output[0] as List).cast<double>();
       final max = probs.reduce((a, b) => a > b ? a : b);
       final idx = probs.indexOf(max);
       label = '${_labels[idx]} (${(max * 100).toStringAsFixed(1)}%)';
@@ -240,18 +241,63 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     return file;
   }
 
+  // Permintaan permission
+  Future<bool> _requestPermission() async {
+    if (Platform.isAndroid) {
+      // Android < 11: STORAGE
+      if (await Permission.storage.isGranted) return true;
+
+      // Android 11–12: MANAGE_EXTERNAL_STORAGE (all files)
+      if (Platform.isAndroid &&
+          (await Permission.manageExternalStorage.isDenied)) {
+        final status = await Permission.manageExternalStorage.request();
+        return status.isGranted;
+      }
+
+      // Android < 11: fallback ke storage
+      final status = await Permission.storage.request();
+      return status.isGranted;
+    } else if (Platform.isIOS) {
+      // iOS: photo library
+      final status = await Permission.photos.request();
+      return status.isGranted;
+    }
+    // other platforms
+    return true;
+  }
+  
+  // Simpan ke galeri
   Future<void> _saveProcessedImage() async {
     if (_selectedImage == null || _originalImage == null) return;
-    if (!await Permission.storage.request().isGranted) return;
+    if (!await _requestPermission()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Storage permission denied')),
+      );
+      return;
+    }
 
+    // 1. Render gambar dengan kotak & label
     final painted = await _renderImageWithBoxes();
-    final dir = await getExternalStorageDirectory();
-    final path =
-        '${dir!.path}/emotion_${DateTime.now().millisecondsSinceEpoch}.png';
-    await File(path).writeAsBytes(img.encodePng(painted));
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Tersimpan di $path')));
+    // 2. Encode ke PNG bytes
+    final pngBytes = img.encodePng(painted);
+    final bytes = Uint8List.fromList(pngBytes);
+
+    // 3. Simpan ke galeri
+    final result = await ImageGallerySaverPlus.saveImage(
+      bytes,
+      quality: 100, // opsi kualitas
+      name: 'emotion_${DateTime.now().millisecondsSinceEpoch}',
+    );
+
+    // 4. Tampilkan notifikasi
+    final success = (result == true || result['isSuccess'] == true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? 'Gambar tersimpan di galeri!' : 'Gagal menyimpan gambar',
+        ),
+      ),
+    );
   }
 
   Future<img.Image> _renderImageWithBoxes() async {
@@ -313,7 +359,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // IMAGE/VIDEO DISPLAY
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -359,10 +404,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                         ),
               ),
             ),
-
             const SizedBox(height: 12),
-
-            // HORIZONTAL SCROLL VIEW UNTUK FRAME VIDEO
             if (_processedFrames.isNotEmpty)
               SizedBox(
                 height: 140,
@@ -392,10 +434,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                   },
                 ),
               ),
-
             const SizedBox(height: 12),
-
-            // ACTION BUTTONS
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
@@ -550,5 +589,5 @@ class FaceBoxPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant FaceBoxPainter old) => true;
+  bool shouldRepaint(covariant FaceBoxPainter oldDelegate) => true;
 }
