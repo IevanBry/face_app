@@ -13,6 +13,50 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 
+class LoadingHelper {
+  /// Tampilkan dialog loading yang tidak dapat dibatalkan
+  static Future<void> showLoadingDialog(BuildContext context) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible:
+          false, // cegah tap di luar dialog untuk menutup :contentReference[oaicite:1]{index=1}
+      builder: (BuildContext context) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    CircularProgressIndicator(), // indikator loading :contentReference[oaicite:2]{index=2}
+                    SizedBox(height: 12),
+                    Text('Memuat...', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Tutup dialog loading
+  static void hideLoadingDialog(BuildContext context) {
+    Navigator.of(
+      context,
+    ).pop(); // pop dari stack dialog :contentReference[oaicite:3]{index=3}
+  }
+}
+
 class EmotionDetectorScreen extends StatefulWidget {
   const EmotionDetectorScreen({Key? key}) : super(key: key);
 
@@ -36,6 +80,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
   List<img.Image> _processedFrames = [];
   List<String> _frameLabels = [];
+
+  Uint8List? _displayedFrameBytes; // ← tambahkan ini
 
   @override
   void initState() {
@@ -69,6 +115,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     final picked = await ImagePicker().pickImage(source: src);
     if (picked == null) return;
 
+    LoadingHelper.showLoadingDialog(context);
+
     setState(() {
       _selectedImage = File(picked.path);
       _selectedVideo = null;
@@ -79,6 +127,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     });
 
     await _detectAndClassifyImage(_selectedImage!);
+    LoadingHelper.hideLoadingDialog(context);
   }
 
   Future<void> _detectAndClassifyImage(File file) async {
@@ -265,7 +314,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     // other platforms
     return true;
   }
-  
+
   // Simpan ke galeri
   Future<void> _saveProcessedImage() async {
     if (_selectedImage == null || _originalImage == null) return;
@@ -338,6 +387,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _isProcessing = false;
       _processedFrames.clear();
       _frameLabels.clear();
+      _displayedFrameBytes = null;
     });
   }
 
@@ -359,12 +409,18 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // Frame besar
             Expanded(
               child: Container(
                 width: double.infinity,
                 color: Colors.grey[900],
                 child:
-                    (_selectedImage != null && _originalImage != null)
+                    _displayedFrameBytes != null
+                        ? Image.memory(
+                          _displayedFrameBytes!,
+                          fit: BoxFit.contain,
+                        )
+                        : (_selectedImage != null && _originalImage != null)
                         ? LayoutBuilder(
                           builder: (ctx, constraints) {
                             final ar =
@@ -396,7 +452,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                             );
                           },
                         )
-                        : Center(
+                        : const Center(
                           child: Text(
                             'Pilih Gambar atau Video',
                             style: TextStyle(color: Colors.white54),
@@ -404,7 +460,10 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                         ),
               ),
             ),
+
             const SizedBox(height: 12),
+
+            // Thumbnails
             if (_processedFrames.isNotEmpty)
               SizedBox(
                 height: 140,
@@ -415,26 +474,36 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                     final bytes = Uint8List.fromList(
                       img.encodeJpg(_processedFrames[index]),
                     );
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Column(
-                        children: [
-                          Image.memory(bytes, height: 100),
-                          const SizedBox(height: 4),
-                          Text(
-                            _frameLabels[index],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _displayedFrameBytes = bytes;
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Column(
+                          children: [
+                            Image.memory(bytes, height: 100),
+                            const SizedBox(height: 4),
+                            Text(
+                              _frameLabels[index],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     );
                   },
                 ),
               ),
+
             const SizedBox(height: 12),
+
+            // Tombol aksi
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
