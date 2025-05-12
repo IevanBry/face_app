@@ -81,7 +81,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
   List<img.Image> _processedFrames = [];
   List<String> _frameLabels = [];
 
-  Uint8List? _displayedFrameBytes; // ← tambahkan ini
+  Uint8List? _displayedFrameBytes;
+  int? _selectedFrameIndex;
 
   @override
   void initState() {
@@ -192,6 +193,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     final picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
     if (picked == null) return;
 
+    LoadingHelper.showLoadingDialog(context);
+
     setState(() {
       _selectedVideo = File(picked.path);
       _selectedImage = null;
@@ -202,6 +205,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     });
 
     await _processVideo(_selectedVideo!);
+    LoadingHelper.hideLoadingDialog(context);
   }
 
   Future<void> _processVideo(File videoFile) async {
@@ -209,6 +213,8 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _isProcessing = true;
       _processedFrames.clear();
       _frameLabels.clear();
+      _displayedFrameBytes = null;
+      _selectedFrameIndex = null;
     });
 
     final controller = VideoPlayerController.file(videoFile);
@@ -225,59 +231,105 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
         quality: 80,
       );
       if (bytes == null) continue;
-
       final frameImg = img.decodeImage(bytes);
       if (frameImg == null) continue;
 
-      await _classifyFrame(frameImg, addToList: true);
+      final result = await _processAndClassifyFrame(frameImg);
+
+      // tambahkan tiap frame ke list
+      _processedFrames.add(result['image'] as img.Image);
+      _frameLabels.add((result['labels'] as List<String>).join(', '));
     }
 
-    setState(() => _isProcessing = false);
+    // Setelah loop selesai, langsung pilih frame pertama
+    if (_processedFrames.isNotEmpty) {
+      final firstBytes = Uint8List.fromList(
+        img.encodeJpg(_processedFrames.first),
+      );
+      _displayedFrameBytes = firstBytes;
+      _selectedFrameIndex = 0;
+    }
+
+    setState(() {
+      _isProcessing = false;
+      // agar UI rebuild dengan displayedFrameBytes & selectedFrameIndex baru
+    });
   }
 
-  Future<String> _classifyFrame(
-    img.Image frame, {
-    bool addToList = false,
-  }) async {
+  /// Mengembalikan pasangan (processedImage, label)
+  Future<Map<String, dynamic>> _processAndClassifyFrame(img.Image frame) async {
+    // Simpan sementara frame ke file untuk deteksi ML Kit
     final tmp = await _saveTempJpeg(frame);
     final faces = await _faceDetector.processImage(
       InputImage.fromFilePath(tmp.path),
     );
     tmp.deleteSync();
 
-    String label;
-    if (faces.isEmpty) {
-      label = 'No face';
-    } else {
-      final box = faces.first.boundingBox;
-      final crop = img.copyCrop(
-        frame,
-        x: box.left.toInt().clamp(0, frame.width - 1),
-        y: box.top.toInt().clamp(0, frame.height - 1),
-        width: box.width.toInt().clamp(1, frame.width),
-        height: box.height.toInt().clamp(1, frame.height),
-      );
+    // Copy asli untuk digambar
+    final processed = img.copyResize(
+      frame,
+      width: frame.width,
+      height: frame.height,
+    );
+    final labels = <String>[];
+
+    // Iterasi setiap wajah yang terdeteksi :contentReference[oaicite:3]{index=3}
+    for (final face in faces) {
+      final box = face.boundingBox;
+      // Pastikan koordinat valid :contentReference[oaicite:4]{index=4}
+      final left = box.left.toInt().clamp(0, frame.width - 1);
+      final top = box.top.toInt().clamp(0, frame.height - 1);
+      final w = box.width.toInt().clamp(1, frame.width);
+      final h = box.height.toInt().clamp(1, frame.height);
+
+      // Crop → resize → input untuk TFLite
+      final crop = img.copyCrop(frame, x: left, y: top, width: w, height: h);
       final resized = img.copyResize(crop, width: 224, height: 224);
       final input = _imageToInput(resized);
 
+      // Inferensi TFLite
       var output = List.filled(
         _labels.length,
         0.0,
       ).reshape([1, _labels.length]);
       _interpreter.run([input], output);
-
       final probs = (output[0] as List).cast<double>();
       final max = probs.reduce((a, b) => a > b ? a : b);
       final idx = probs.indexOf(max);
-      label = '${_labels[idx]} (${(max * 100).toStringAsFixed(1)}%)';
+      final label = '${_labels[idx]} (${(max * 100).toStringAsFixed(1)}%)';
+
+      labels.add(label);
+
+      // Gambar kotak merah di frame :contentReference[oaicite:5]{index=5}
+      img.drawRect(
+        processed,
+        x1: left,
+        y1: top,
+        x2: left + w,
+        y2: top + h,
+        color: img.ColorRgba8(255, 0, 0, 255),
+        thickness: 3,
+      );
+
+      img.drawString(
+        processed,
+        label,
+        font: img.arial24,
+        x: left,
+        y: top + h + 4,
+        color: img.ColorRgba8(255, 255, 255, 255),
+      );
     }
 
-    if (addToList) {
-      _processedFrames.add(frame);
-      _frameLabels.add(label);
+    // Jika tidak ada wajah, tambahkan informasi No face :contentReference[oaicite:7]{index=7}
+    if (faces.isEmpty) {
+      labels.add('No face');
     }
 
-    return label;
+    return {
+      'image': processed,
+      'labels': labels, // sekarang bisa multiple labels
+    };
   }
 
   Future<File> _saveTempJpeg(img.Image image) async {
@@ -388,6 +440,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       _processedFrames.clear();
       _frameLabels.clear();
       _displayedFrameBytes = null;
+      _selectedFrameIndex = null;
     });
   }
 
@@ -463,7 +516,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
 
             const SizedBox(height: 12),
 
-            // Thumbnails
             if (_processedFrames.isNotEmpty)
               SizedBox(
                 height: 140,
@@ -471,36 +523,24 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                   scrollDirection: Axis.horizontal,
                   itemCount: _processedFrames.length,
                   itemBuilder: (context, index) {
-                    final bytes = Uint8List.fromList(
+                    final processedBytes = Uint8List.fromList(
                       img.encodeJpg(_processedFrames[index]),
                     );
                     return GestureDetector(
                       onTap: () {
                         setState(() {
-                          _displayedFrameBytes = bytes;
+                          _displayedFrameBytes = processedBytes;
+                          _selectedFrameIndex = index;
                         });
                       },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Column(
-                          children: [
-                            Image.memory(bytes, height: 100),
-                            const SizedBox(height: 4),
-                            Text(
-                              _frameLabels[index],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
+                        child: Image.memory(processedBytes, height: 100),
                       ),
                     );
                   },
                 ),
               ),
-
             const SizedBox(height: 12),
 
             // Tombol aksi
