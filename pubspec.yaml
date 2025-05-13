@@ -70,7 +70,7 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
-    - assets/logo.jpeg
+    - assets/logo1.jpg
     - assets/best_float32.tflite
     - assets/label.txt
   #   - images/a_dot_ham.jpeg
@@ -103,4 +103,4 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/logo.jpeg"
+  image_path: "assets/logo1.jpg"
