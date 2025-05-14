@@ -128,6 +128,7 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     });
 
     await _detectAndClassifyImage(_selectedImage!);
+
     LoadingHelper.hideLoadingDialog(context);
   }
 
@@ -139,7 +140,9 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
       setState(() {
         _predictions = ['Tidak ada wajah terdeteksi.'];
       });
-      return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tidak ada wajah terdeteksi')),
+      );
     }
 
     final bytes = await file.readAsBytes();
@@ -471,18 +474,18 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                 width: double.infinity,
                 color: Colors.grey[900],
                 child:
-                    _displayedFrameBytes != null
-                        ? Image.memory(
-                          _displayedFrameBytes!,
-                          fit: BoxFit.contain,
-                        )
-                        : (_selectedImage != null && _originalImage != null)
+                    _selectedImage != null
                         ? LayoutBuilder(
-                          builder: (ctx, constraints) {
+                          builder: (ctx, constraints) {gi
+                            if (_originalImage == null) {
+                              return Center(child: CircularProgressIndicator());
+                            }
+
                             final ar =
                                 _originalImage!.width / _originalImage!.height;
                             final width = constraints.maxWidth;
                             final height = width / ar;
+
                             return SizedBox(
                               width: width,
                               height: height,
@@ -493,16 +496,28 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                                     _selectedImage!,
                                     fit: BoxFit.cover,
                                   ),
-                                  CustomPaint(
-                                    painter: FaceBoxPainter(
-                                      faceRects: _faceBoxes,
-                                      labels: _predictions,
-                                      originalSize: Size(
-                                        _originalImage!.width.toDouble(),
-                                        _originalImage!.height.toDouble(),
+                                  if (_faceBoxes.isNotEmpty)
+                                    CustomPaint(
+                                      painter: FaceBoxPainter(
+                                        faceRects: _faceBoxes,
+                                        labels: _predictions,
+                                        originalSize: Size(
+                                          _originalImage!.width.toDouble(),
+                                          _originalImage!.height.toDouble(),
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Center(
+                                      child: Text(
+                                        'Tidak ada wajah terdeteksi.',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
                             );
