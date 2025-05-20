@@ -14,12 +14,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 
 class LoadingHelper {
-  /// Tampilkan dialog loading yang tidak dapat dibatalkan
   static Future<void> showLoadingDialog(BuildContext context) {
     return showDialog<void>(
       context: context,
       barrierDismissible:
-          false, // cegah tap di luar dialog untuk menutup :contentReference[oaicite:1]{index=1}
+          false,
       builder: (BuildContext context) {
         return WillPopScope(
           onWillPop: () async => false,
@@ -36,7 +35,7 @@ class LoadingHelper {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: const [
-                    CircularProgressIndicator(), // indikator loading :contentReference[oaicite:2]{index=2}
+                    CircularProgressIndicator(),
                     SizedBox(height: 12),
                     Text('Memuat...', style: TextStyle(color: Colors.white)),
                   ],
@@ -53,7 +52,7 @@ class LoadingHelper {
   static void hideLoadingDialog(BuildContext context) {
     Navigator.of(
       context,
-    ).pop(); // pop dari stack dialog :contentReference[oaicite:3]{index=3}
+    ).pop();
   }
 }
 
@@ -128,7 +127,6 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     });
 
     await _detectAndClassifyImage(_selectedImage!);
-
     LoadingHelper.hideLoadingDialog(context);
   }
 
@@ -137,12 +135,20 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
     final faces = await _faceDetector.processImage(inputImg);
 
     if (faces.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.deepOrangeAccent,
+          content: const Text(
+            'Wajah tidak terdeteksi',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+
       setState(() {
         _predictions = ['Tidak ada wajah terdeteksi.'];
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tidak ada wajah terdeteksi')),
-      );
+      return;
     }
 
     final bytes = await file.readAsBytes();
@@ -474,18 +480,18 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                 width: double.infinity,
                 color: Colors.grey[900],
                 child:
-                    _selectedImage != null
+                    _displayedFrameBytes != null
+                        ? Image.memory(
+                          _displayedFrameBytes!,
+                          fit: BoxFit.contain,
+                        )
+                        : (_selectedImage != null && _originalImage != null)
                         ? LayoutBuilder(
-                          builder: (ctx, constraints) {gi
-                            if (_originalImage == null) {
-                              return Center(child: CircularProgressIndicator());
-                            }
-
+                          builder: (ctx, constraints) {
                             final ar =
                                 _originalImage!.width / _originalImage!.height;
                             final width = constraints.maxWidth;
                             final height = width / ar;
-
                             return SizedBox(
                               width: width,
                               height: height,
@@ -496,28 +502,16 @@ class _EmotionDetectorScreenState extends State<EmotionDetectorScreen> {
                                     _selectedImage!,
                                     fit: BoxFit.cover,
                                   ),
-                                  if (_faceBoxes.isNotEmpty)
-                                    CustomPaint(
-                                      painter: FaceBoxPainter(
-                                        faceRects: _faceBoxes,
-                                        labels: _predictions,
-                                        originalSize: Size(
-                                          _originalImage!.width.toDouble(),
-                                          _originalImage!.height.toDouble(),
-                                        ),
-                                      ),
-                                    )
-                                  else
-                                    Center(
-                                      child: Text(
-                                        'Tidak ada wajah terdeteksi.',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                                  CustomPaint(
+                                    painter: FaceBoxPainter(
+                                      faceRects: _faceBoxes,
+                                      labels: _predictions,
+                                      originalSize: Size(
+                                        _originalImage!.width.toDouble(),
+                                        _originalImage!.height.toDouble(),
                                       ),
                                     ),
+                                  ),
                                 ],
                               ),
                             );
