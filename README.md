@@ -1,16 +1,26 @@
-# face_app
+# Face Emotion Detection App 😄😡😢
 
-A new Flutter project.
+A Flutter application for real-time **facial emotion detection** using the **YOLO (You Only Look Once)** object detection model.
 
-## Getting Started
+## 📱 About the App
 
-This project is a starting point for a Flutter application.
+This app uses the device’s camera to detect and classify human facial emotions in real time. It supports recognizing common facial expressions such as:
 
-A few resources to get you started if this is your first Flutter project:
+- 😊 Happy  
+- 😢 Sad  
+- 😠 Angry  
+- 😮 Surprised  
+- 😐 Neutral
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### 🧠 Key Technologies
+- **Flutter** – Cross-platform mobile development framework.
+- **YOLO (TFLite/ONNX)** – Real-time object detection and emotion classification.
+- **camera** package – For accessing the device's camera.
+- **image** package – Image preprocessing.
+- **tflite / yolov5_flutter / tflite_flutter** – For running machine learning models on-device.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 📦 Features
+- face detection from camera input.
+- Emotion classification using YOLO-based model.
+- Overlay bounding boxes and emotion labels on detected faces.
+- Supports multiple faces in a frame.
